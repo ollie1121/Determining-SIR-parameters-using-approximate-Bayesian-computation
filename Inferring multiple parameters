@@ -1,0 +1,621 @@
+library(ggplot2)
+# parameters
+
+populations = list(S = 900, I = 10, R = 0, N = 910)
+#variables
+
+generation = 100
+
+stoch_param = list(B = 0.4, g = 0.08, f = 0.3)
+
+#tolerance
+tolerance = 1.25
+
+#simulations
+simulations = 1:1000
+
+#number of values for posterior distribution
+number_of_runs = 100
+
+#no of repeates 
+repeates = 1
+
+#Prior distribution
+potential_beta = list(trys = 1, min = 0.01, max = 0.6)
+potential_gamma = list(trys = 1, min = 0.01, max = 0.06)
+
+
+#value being predicted
+x = stoch_param$f
+
+# variable tolerance list
+tolerance_R = 1.25
+tolerance_I = 1.25
+tolernce_dual = 1.25
+
+observed_data = read.csv("C:\\Users\\ollie\\Desktop\\Uni - 3rd year\\Research project\\R\\Project code\\comparison data\\Summery_comparison_observed_data_1")
+
+
+# SIR model 
+Stochastic_sir_model = function(times, state, param) {
+  S = state$S
+  I = state$I
+  R = state$R
+  N = state$N
+  
+  B = param$B
+  g = param$g
+  
+  #data frames
+  data = data.frame(
+    Day = 1:generation,
+    Suseptable = numeric(generation),
+    Infected = numeric(generation),
+    Recovered = numeric(generation)
+  )
+  
+  param_data = data.frame(
+    day = 1:generation,
+    Sup_change = numeric(generation),
+    Inf_change = numeric(generation),
+    Recov_change = numeric(generation)
+  )
+  
+  #For loop
+  for(i in 1:generation){
+    
+    #stochastic parameters (environmental variation)
+    F = 0.3
+    E = rnorm(n = 1, mean = 0, sd = 1)
+    Be = B * (1 + F * E)
+    
+    
+    dS = - Be * S * I / N
+    dI = Be * S * I / N - g * I
+    dR = g * I
+    
+    S = max(S + dS, 0)
+    I = max(I + dI, 0)
+    R = max(R + dR, 0) 
+    
+    data$Suseptable[i] = S
+    data$Infected[i] = I
+    data$Recovered[i] = R
+    
+    
+    param_data$Sup_change[i] = dS
+    param_data$Inf_change[i] = dI
+    param_data$Recov_change[i] = dR
+    
+  }
+  
+  
+  return(data)
+}
+
+
+
+#Stepwise comparison of recovered data 
+recovered_comparison_ss = function(comparison, generation){
+  #going through the data frame producing the summery stat (abs() used to return absolute number, no negatives)
+  summery_statistic = 0  
+  pre_statistic = 0
+  for (i in generation){
+    #root mean squared error or ellucian distance requires squaring then square rooting
+    prior_sum = (comparison$simulation[i] - comparison$observed[i])^2
+    pre_statistic = pre_statistic + prior_sum
+  }
+  summery_statistic = sqrt(pre_statistic)
+  #Remove NA's to make data easier to work with
+  summery_statistic[is.na(summery_statistic)] = 0
+  return(summery_statistic)
+}
+
+#Time to infected peak
+time_to_peak = function(comparison){
+  max_observed = comparison$day[which.max(comparison$observed)]
+  max_simulated = comparison$day[which.max(comparison$simulation)]
+  
+  
+  #elucian distance
+  distance = sqrt((max_simulated - max_observed)^2)
+  
+  
+  return(distance)
+}
+
+dual_ss = function(infected_data, recovery_data, generation){
+  #Recovery ss
+  summery_statistic = 0  
+  pre_statistic = 0
+  for (i in generation){
+    #root mean squared error or ellucian distance requires squaring then square rooting
+    prior_sum = (recovery_data$simulation[i] - recovery_data$observed[i])^2
+    pre_statistic = pre_statistic + prior_sum
+  }
+  summery_statistic = sqrt(pre_statistic)
+  #infected_ss
+  max_observed = infected_data$day[which.max(recovery_data$observed)]
+  max_simulated = infected_data$day[which.max(recovery_data$simulation)]
+  #elucian distance
+  distance = sqrt((max_simulated - max_observed)^2)
+  
+  #joint distance
+  final_distance = distance + summery_statistic
+  
+  return(final_distance)
+}
+
+
+#range of betas (could be issues with these nto being intergers,
+# 1 try as each simulation the number will be updated )
+
+# Use this fucntion if one tolerance level is being used
+one_tol_func = function(summery_statistic, tolerance, beta, gamma){
+  pre_answer_beta = 0
+  pre_answer_gamma = 0
+  if (summery_statistic <= tolerance){
+    pre_answer_beta = pre_answer_beta + beta
+    pre_answer_gamma = pre_answer_gamma + gamma
+  }
+  output = list(pre_answer_beta, pre_answer_gamma)
+  return(output)
+}
+
+#use this if seperate tolerances
+two_tol_func = function(summery_statistic_R, summery_statistic_I, tolerance_1, tolerance_2, beta){
+  pre_answer = 0
+  if (summery_statistic_R <= tolerance_1 && summery_statistic_I <= tolerance_2){
+    pre_answer = pre_answer + beta
+  }  
+  return(pre_answer)
+}
+
+
+#ABC algorithm
+
+ABC = function(simulations, beta_range, gamma_range, observed_all_data, tolerance){ 
+  beta_answer = list()
+  gamma_answer = list()
+  prior_beta = list()
+  prior_gamma = list()
+  for (i in simulations){
+    #function to produce a new beta each run from values outside the function - may need to put an if function to ensure the same beta isnt being used
+    beta = runif(beta_range$trys, min = beta_range$min, max = beta_range$max)
+    gamma = runif(gamma_range$trys, min = gamma_range$min, max = gamma_range$max)
+    #print(paste('beta used: ',beta))
+    
+    #Adding prior to a vector and changing the value of the parameter
+    stoch_param$B = beta
+    stoch_param$g = gamma
+    prior_beta = append(prior_beta, beta)
+    prior_gamma = append(prior_gamma, gamma)
+    
+    #access the recovered population 
+    
+    sim = Stochastic_sir_model(generation, populations, stoch_param)
+    recovered_data = sim$Recovered
+    infected_data = sim$Infected
+    
+    #print(paste('simulations recovered data: ', recovered_data))
+    
+    #Data frames to compare observed and recovered
+    comparison_data_infected = data.frame(
+      day = 1:generation,
+      simulation = numeric(generation),
+      observed = numeric(generation)
+    )
+    comparison_data_infected$simulation = infected_data
+    comparison_data_infected$observed = observed_all_data$Infected
+    
+    comparison_data_recovered = data.frame (
+      day = 1:generation,
+      simulation = numeric(generation),
+      observed = numeric(generation)
+    )
+    comparison_data_recovered$simulation = recovered_data
+    comparison_data_recovered$observed = observed_all_data$Recovered
+    #print(paste('data frame of the simulation and observed', comparison_data))
+    
+    #summery_statistic_I = time_to_peak(comparison_data_infected)
+    summery_statistic_R = recovered_comparison_ss(comparison_data_recovered, generation)
+    #summery_statistic_dual = dual_ss(comparison_data_infected, comparison_data_recovered, generation)
+    
+    #acceptance section
+    #pre_answer = two_tol_func(summery_statistic_R, summery_statistic_I, tolerance_R, tolerance_I, beta)
+    pre_answer = one_tol_func(summery_statistic_R, tolerance_R, beta, gamma)
+    
+    beta_answer = append(beta_answer, pre_answer[1])
+    gamma_answer = append(gamma_answer, pre_answer[2])
+    
+  }
+  print('here')
+  #data frame that holds both prior and post data 
+  pp_results = data.frame(
+    prior_beta = unlist(prior_beta),
+    posteria_beta = unlist(beta_answer),
+    prior_gamma = unlist(prior_gamma),
+    posteria_gamma = unlist(gamma_answer)
+  )
+  return(pp_results)
+}
+#Trouble shooting
+#Ts = (ABC(simulations, potential_beta, recovered_observed, tolerance))
+#print(Ts$prior)
+# Run ABC model until 100 results produced 
+
+ABC_100 = function(number){
+  all_post_values_beta = c()
+  all_prior_values_beta = c()
+  all_post_values_gamma = c()
+  all_prior_values_gamma = c()
+  tally_beta = 0 
+  tally_gamma = 0
+  runs = 0
+  while(tally_beta < number | tally_beta == number && tally_gamma < number | tally_gamma == number){
+    
+    runs = runs + 1
+    
+    final = ABC(simulations, potential_beta, potential_gamma, ABC_model_data , tolerance_R) 
+    final_post_beta = final$posteria_beta
+    final_prior_beta = final$prior_beta
+    
+    final_post_gamma = final$posteria_gamma
+    final_prior_gamma = final$prior_gamma
+    
+    #Print only values bigger than 0
+    only_values_beta = c()
+    for (i in final_post_beta){
+      if (i > 0){
+        only_values_beta = append(only_values_beta, i)
+        
+      }
+    }
+    
+    only_values_gamma = c()
+    for (i in final_post_gamma){
+      if (i > 0){
+        only_values_gamma = append(only_values_gamma, i)
+      }
+    }
+    
+    # adding values from this run to the empty value 
+    all_post_values_beta = append(all_post_values_beta, only_values_beta)
+    all_prior_values_beta = append(all_prior_values_beta, final_prior_beta)
+    
+    all_post_values_gamma = append(all_post_values_gamma, only_values_gamma)
+    all_prior_values_gamma = append(all_prior_values_gamma, final_prior_gamma)
+    
+    #Counts the number of values and adds to tally 
+    no_values_beta = length(only_values_beta)
+    no_values_gamma = length(only_values_gamma)
+    print(paste('Individual run for beta: ', no_values_beta))
+    print(paste('Individual run for gamma: ', no_values_gamma))
+    tally_beta = tally_beta + no_values_beta
+    tally_gamma = tally_gamma + no_values_gamma
+    print(paste('ABC_100 runs: ', runs))
+   
+ 
+   }
+  
+  #Remove so only 100
+  remove_no = length(all_post_values_beta) - 100
+  all_post_beta_ = all_post_values_beta[-(1:remove_no)]
+  
+  remove_no = length(all_post_values_gamma) - 100
+  all_post_gamma_ = all_post_values_gamma[-(1:remove_no)]
+  
+  #table of results 
+  all_results = list(
+    all_prior_beta = all_prior_values_beta,
+    all_post_beta = all_post_beta_,
+    total_posterior_beta = all_post_values_beta,
+    all_prior_gamma = all_prior_values_gamma,
+    all_post_gamma = all_post_gamma_,
+    total_posterior_gamma = all_post_values_gamma
+  )
+  
+  return(all_results)
+}
+
+
+multiple_runs = function(repeates){
+  tally = 1 
+  simulation = 1
+  all_post_data_beta = data.frame()
+  all_prior_data_beta = data.frame()
+  all_sims = data.frame()
+  L_of_post_beta = 0
+  L_of_prior_beta = 0
+  all_lower_CI_beta = c()
+  all_upper_CI_beta = c()
+  all_post_data_gamma = data.frame()
+  all_prior_data_gamma = data.frame()
+  L_of_post_gamma = 0
+  L_of_prior_gamma = 0
+  all_lower_CI_gamma = c()
+  all_upper_CI_gamma = c()
+ 
+  while (tally < repeates | tally == repeates ){
+    results = ABC_100(number_of_runs)
+    
+    #saving the whole sets of data and saving their lengths
+    #beta
+    hold_total_post_beta = data.frame(
+      Simulation = simulation,
+      Values = results$all_post_beta
+    )
+    
+    all_post_data_beta = rbind(all_post_data_beta, hold_total_post_beta)
+    L_of_post_beta = L_of_post_beta + length(results$total_posterior_beta)
+    
+    hold_total_prior_beta = data.frame(
+      Simulation = simulation,
+      Values = results$all_prior_beta
+    )
+    
+    all_prior_data = rbind(all_prior_data_beta, hold_total_prior_beta)
+    L_of_prior_beta = L_of_prior_beta + length(results$all_prior_beta)
+    #gamma
+    hold_total_post_gamma = data.frame(
+      Simulation = simulation,
+      Values = results$all_post_gamma
+    )
+    
+    all_post_data_gamma = rbind(all_post_data_gamma, hold_total_post_gamma)
+    L_of_post_gamma = L_of_post_gamma + length(results$total_posterior_gamma)
+    
+    hold_total_prior_gamma = data.frame(
+      Simulation = simulation,
+      Values = results$all_prior_gamma
+    )
+    print('here 3')
+    all_prior_data_gamma = rbind(all_prior_data_gamma, hold_total_prior_gamma)
+    L_of_prior_gamma = L_of_prior_gamma + length(results$all_prior_gamma)
+    
+    #save means and medians 
+    hold_results_table = data.frame(
+      Simulation = simulation,
+      Mean_beta = mean(results$all_post_beta),
+      Median_beta = median(results$all_post_beta),
+      CI_lower_beta = quantile(results$all_post_beta, c(0.025)),
+      CI_upper_beta = quantile(results$all_post_beta, c(0.975)),
+      Mean_gamma = mean(results$all_post_gamma),
+      Median_gamma = median(results$all_post_gamma),
+      CI_lower_gamma = quantile(results$all_post_gamma, c(0.025)),
+      CI_upper_gamma = quantile(results$all_post_gamma, c(0.975))
+    )
+    
+    all_sims= rbind(all_sims, hold_results_table)
+    
+    all_upper_CI_beta = c(all_upper_CI_beta, hold_results_table$CI_upper_beta)
+    all_lower_CI_beta = c(all_lower_CI_beta, hold_results_table$CI_lower_beta)
+    
+    all_upper_CI_gamma = c(all_upper_CI_gamma, hold_results_table$CI_upper_gamma)
+    all_lower_CI_gamma = c(all_lower_CI_gamma, hold_results_table$CI_lower_gamma)
+    
+    
+    tally = tally + 1
+    simulation = simulation + 1
+    print(tally)
+  }
+  print(all_sims)
+  #descriptive statistic calculations - beta
+  #RMSE
+  RMSE_calc = function(data_set, true_value){
+    pre_answer = 0
+    for (i in data_set){
+      answer = (i - true_value)^2
+      pre_answer = pre_answer + answer
+    }
+    RMSE = sqrt(pre_answer/100)
+    
+    return(RMSE)
+  }
+  
+  RMSE_mean_beta = RMSE_calc(all_sims$Mean_beta, x)
+  RMSE_mean_gamma = RMSE_calc(all_sims$Mean_gamma, x)
+  print(RMSE_mean_beta)
+  print(RMSE_mean_gamma)
+  
+  #RMSE (median)
+  RMSE_calc = function(data_set, true_value){
+    pre_answer = 0
+    for (i in data_set){
+      answer = (i - true_value)^2
+      pre_answer = pre_answer + answer
+    }
+    RMSE = sqrt(pre_answer/100)
+    
+    return(RMSE)
+  }
+  
+  RMSE_median_beta = RMSE_calc(all_sims$Median_beta, x)
+  RMSE_median_gamma = RMSE_calc(all_sims$Median_gamma, x)
+  print(RMSE_median_beta)
+  print(RMSE_median_gamma)
+  
+  #MAE
+  MAE_calc = function(data_set, true_value){
+    pre_answer = 0
+    for (i in data_set){
+      answer = abs(i - true_value)
+      pre_answer = pre_answer + answer
+    }
+    MAE = pre_answer/100
+    
+    return(MAE)
+  }
+  
+  MAE_beta = MAE_calc(all_sims$Mean_beta, x)
+  MAE_gamma = MAE_calc(all_sims$Mean_gamma, x)
+  print(MAE_beta)
+  print(MAE_gamma)
+  
+  # Bias
+  bias_calc = function(data_set, true_value){
+    mean = mean(data_set)
+    bias = mean - true_value
+    
+    return(bias)
+  }
+  
+  bias_beta = bias_calc(all_sims$Mean_beta, x)
+  bias_gamma = bias_calc(all_sims$Mean_gamma, x)
+  print(bias_beta)
+  print(bias_gamma)
+  #coverage post -beta
+  
+  tally_coverage_beta = 0
+  for (i in 1:repeates){
+    if (x > all_sims$CI_lower_beta[i] && x < all_sims$CI_upper_beta[i]){
+      tally_coverage_beta = tally_coverage_beta + 1
+    }
+  }
+  
+  coverage_beta = tally_coverage_beta/repeates
+  print(coverage_beta)
+  #coverage post -gamma
+  
+  tally_coverage_gamma = 0
+  for (i in 1:repeates){
+    if (stoch_param$g > all_sims$CI_lower_gamma[i] && stoch_param$g < all_sims$CI_upper_gamma[i]){
+      tally_coverage_gamma = tally_coverage_gamma + 1
+    }
+  }
+  
+  coverage_gamma = tally_coverage_gamma/repeates
+  print(coverage_gamma)
+  #CI
+  true_CI_upper_beta = mean(all_upper_CI_beta)
+  true_CI_lower_beta = mean(all_lower_CI_beta)
+  print(true_CI_upper_beta)
+  print(true_CI_upper_beta)
+  
+  true_CI_upper_gamma = mean(all_upper_CI_gamma)
+  true_CI_lower_gamma = mean(all_lower_CI_gamma)
+  print(true_CI_upper_gamma)
+  print(true_CI_upper_gamma)
+  
+  #Acceptance rate
+  print(L_of_post_beta)
+  print(L_of_prior_beta)
+  acceptance = L_of_post_beta/L_of_prior_beta
+  print(acceptance)
+  
+  
+  
+  # table of descriptive statistics #, c(0.025, 0.975)), ,
+  descriptive_table = data.frame(
+    #credibitlity_lower_Mean = quantile(all_sims$Mean, c(0.025)),
+    #credibility_upper_Mean = quantile(all_sims$Mean, c(0.975)),
+    true_credibitlity_lower_Mean_beta = true_CI_lower_beta,
+    true_credibitlity_upper_Mean_beta = true_CI_upper_beta,
+    median_beta = median(all_sims$Mean_beta),
+    coverage_beta= coverage_beta,
+    Bias_beta = bias_beta,
+    MAE_beta = MAE_beta,
+    RMSE_mean_beta = RMSE_mean_beta,
+    RMSE_median_beta = RMSE_median_beta,
+    true_credibitlity_lower_Mean_gamma = true_CI_lower_gamma,
+    true_credibitlity_upper_Mean_gamma = true_CI_upper_gamma,
+    median_beta_gamma = median(all_sims$Mean_gamma),
+    coverage_gamma = coverage_gamma,
+    Bias_gamma = bias_gamma,
+    MAE_gamma = MAE_gamma,
+    RMSE_mean_gamma = RMSE_mean_gamma,
+    RMSE_median_gamma = RMSE_median_gamma,
+    Acceptance_rate = acceptance
+  )
+  print(paste('This poins'))
+  
+  full_data = list(all_post_data_beta, all_post_data_gamma)
+  #write.csv(full_data, 'B&G_parameter_100_comparison_data')
+  print(descriptive_table)
+  #write.csv(descriptive_table, 'B&G_parameter_100_comparison_ds')
+  
+  return(full_data)
+}
+
+data = multiple_runs(repeates)
+
+#seperate out the data
+beta_list = data[1]
+beta_plot = as.data.frame(beta_list)
+
+gamma_list = data[2]
+gamma_plot = as.data.frame(gamma_list)
+
+#re-arrange code for plot 
+
+number = 1
+
+#sample(1:repeates, 1)
+
+all_plot_data = data.frame()
+
+
+for (i in beta_plot$Values){
+  integer = which(beta_plot$Values == i)
+
+  sim_number = beta_plot$Simulation[integer]
+  if (sim_number == number){
+    hold_table = data.frame(
+      parameter = 'Beta',
+      value = i)
+    
+    all_plot_data = rbind(all_plot_data, hold_table)
+   
+    
+  }
+  
+  
+}
+
+
+for (i in gamma_plot$Values){
+  integer = which(gamma_plot$Values == i)
+  sim_number = gamma_plot$Simulation[integer]
+  if (sim_number == number){
+    hold_table = data.frame(
+      parameter = 'Gamma',
+      value = i)
+    
+    all_plot_data = rbind(all_plot_data, hold_table)
+   
+    
+  }
+  
+  
+}
+
+print(all_plot_data)
+
+p = ggplot(all_plot_data, aes(x = value,  color = parameter)) +
+  geom_density( bw = 0.005) +
+  labs(x = 'Beta', y = 'Frequency')+
+  geom_vline(xintercept = stoch_param$B, color = 'red', linetype = 'dashed', linewidth = 1 ) +
+  geom_vline(xintercept = stoch_param$g, color = 'green', linetype = 'dashed', linewidth = 1 ) +
+  
+  scale_x_continuous(limits = c(0.01, 0.6), breaks = seq(0,0.6, by = 0.1), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0,30), breaks = seq(0,30, by = 5), expand = c(0,0)) + 
+  
+  theme(
+    axis.title = element_text(face = 'bold', size = '20'),
+    axis.text.y = element_text(size = '13', family = 'arial', color = 'black'),
+    axis.text.x = element_text(size = '12', family = 'arial', color = 'black'),
+    legend.text = element_text(size = '15'),
+    legend.title = element_text(face = 'bold', size = '14'),
+    
+    panel.background = element_rect(fill = 'white', color = NA ),
+    
+    axis.line.y = element_line(color = 'black'),
+    axis.line.x = element_line(color = 'black'),
+    
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(color = 'black'),
+    panel.grid.minor.y = element_line(color = 'black')
+    
+  ) 
+print(p)
