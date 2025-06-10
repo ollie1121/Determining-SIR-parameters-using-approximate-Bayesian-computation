@@ -1,0 +1,270 @@
+# Individuals in population
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+populations = list(S = 900, I = 10, R = 0, N = 910)
+
+# Disease parameters
+  # Transmission rate
+    # Recovery rate
+
+# Rate of change
+param = list(B = 0.4, g = 0.08)
+
+# No of generations
+generation = 100
+
+# Model function
+Determ_sir_model = function(times, state, par) {
+  S = state$S
+  I = state$I
+  R = state$R
+  N = state$N
+  B = par$B
+  g = par$g
+  
+  #data frames
+  data = data.frame(
+    generation = 1:generation,
+    Suseptable = numeric(generation),
+    Infected = numeric(generation),
+    Recovered = numeric(generation), 
+    Simulation = numeric(generation)
+  )
+  
+  param_data = data.frame(
+    day = 1:generation,
+    Sup_change = numeric(generation),
+    Inf_change = numeric(generation),
+    Recov_change = numeric(generation)
+  )
+  for(i in 1:generation){
+   
+      
+      
+      dS = - B * S * I/N
+      dI = B * S * I/N - g * I
+      dR = g * I
+      
+      
+      S = S + dS
+      I = I + dI
+      R = R + dR 
+      
+      data$Suseptable[i] = S
+      data$Infected[i] = I
+      data$Recovered[i] = R
+      
+      param_data$Sup_change[i] = dS
+      param_data$Inf_change[i] = dI
+      param_data$Recov_change[i] = dR
+      
+    }
+  return(list(population_data = data, parameter_data = param_data))
+  
+}
+# deterministic run of model
+#result = Determ_sir_model(generation, populations, param)
+
+
+
+#Stochastic model
+#stochastic parameters
+stoch_param = list(B = 0.4, g = 0.08)
+
+Stochastic_sir_model = function(times, state, param) {
+  S = state$S
+  I = state$I
+  R = state$R
+  N = state$N
+  
+  B = param$B
+  g = param$g
+  
+  #data frames
+  data = data.frame(
+    generation = 1:generation,
+    Suseptable = numeric(generation),
+    Infected = numeric(generation),
+    Recovered = numeric(generation),
+    Simulation = numeric(generation)
+  )
+  
+  param_data = data.frame(
+    day = 1:generation,
+    Sup_change = numeric(generation),
+    Inf_change = numeric(generation),
+    Recov_change = numeric(generation)
+  )
+    
+    #For loop
+    for(i in 1:generation){
+      
+      #stochastic parameters (environmental variation)
+      F = 0.3
+      E = rnorm(n = 1, mean = 0, sd = 1)
+      Be = B * (1 + F * E)
+      #stochastic parameter (population variation)
+      C = 0.3
+      E = rnorm(n = 1, mean = 0, sd = 1)
+      Bp = B * (1 + (C*E)*sqrt(N/I))
+      
+      dS = - Be * S * I / N
+      dI = Be * S * I / N - g * I
+      dR = g * I
+      
+      S = max(S + dS, 0)
+      I = max(I + dI, 0)
+      R = max(R + dR, 0) 
+      
+      #change all na's to 0
+      S[is.na(S)] = data$Suseptable[i - 1]
+      I[is.na(I)] = 0
+      R[is.na(R)] = data$Recovered[i - 1]
+      
+      data$Suseptable[i] = S
+      data$Infected[i] = I
+      data$Recovered[i] = R
+     
+      
+      param_data$Sup_change[i] = dS
+      param_data$Inf_change[i] = dI
+      param_data$Recov_change[i] = dR
+      
+    }
+    
+ 
+  return(list(population_data = data, parameter_data = param_data))
+}
+
+#Saving deterministic and stochastic data sets 
+no_runs = 10
+tally = 1
+all_runs = data.frame()
+sim = 1
+while (tally <= no_runs){
+  
+  stochastic_data = Determ_sir_model(generation, populations, param)
+  data = stochastic_data$population_data
+  data$Simulation = sim
+  
+ #add to list and count tally 
+  all_runs = rbind(all_runs, data)
+  tally = tally + 1
+  sim = sim + 1
+}
+
+print(all_runs)
+
+#save data to a file 
+write.csv(all_runs, 'deteriministic_data')
+
+#calculate mean and standard deviation in peaks of infected individuals.
+
+repeat_1 = all_runs$Infected[1:100]
+
+#calculating descriptive statitsics stats
+ds_list = list()
+start = 0
+stop = 100
+for (i in 1:10){
+  start = start + 1
+ 
+  int = list(all_runs$Infected[start:stop])
+  ds_list = append(ds_list, int)
+  
+  start = start + 99
+  stop = stop + 100
+  
+}
+
+
+
+
+total_peak = c()
+for (i in ds_list){
+  peak = max(i)
+  total_peak = c(total_peak, peak)
+}
+print(paste('list of peak infected ', total_peak))
+
+mean_p = mean(total_peak)
+standard_deviation_p = sd(total_peak)
+Median_p = median(total_peak)
+IQR_p = IQR(total_peak)
+
+total_time_to_peak = c()
+for (i in total_peak){
+  day = which(all_runs$Infected == i)
+  
+  time = all_runs$generation[day]
+  
+  total_time_to_peak = c(total_time_to_peak, time) 
+}
+mean_tp = mean(total_time_to_peak)
+standard_deviation_tp = sd(total_time_to_peak)
+Median_tp = median(total_time_to_peak)
+IQR_tp = IQR(total_time_to_peak)
+
+print(length(total_peak))
+print(length(total_time_to_peak))
+
+ds_results = data.frame(
+  Inter_quartile_range_peak = IQR_p,
+  Median_peak = Median_p,
+  Mean_peak = mean_p,
+  Sd_peak = standard_deviation_p,
+  Peak_infected = total_peak,
+  Inter_quartile_range_tp = IQR_tp,
+  Median_tp = Median_tp,
+  Mean_tp = mean_tp,
+  Sd_tp = standard_deviation_tp,
+  time_to_peak = total_time_to_peak
+  
+)
+print(ds_results)
+
+write.csv(ds_results, 'deterministic_ds')
+#deterministic = Determ_sir_model(generation, populations, stoch_param)
+
+#printing stochastic results 
+
+#print(result_stoc$parameter_data)
+
+#printing deterministic results
+#print(result$population_data)
+#print(result$parameter_data)
+
+results_long = all_runs %>%
+  pivot_longer(cols = c(Suseptable, Infected, Recovered),
+               names_to = 'category', 
+               values_to = 'count')
+
+print(results_long)
+#print(paste('change',stochastic_data$parameter_data))
+#plot results (stochastic)
+
+p = ggplot(results_long, aes(x = generation, y = count, color = category, group = interaction(Simulation, category))) +
+  geom_line() +
+  labs(title = "SIR Model", x = 'Day', y = 'Number of Individuals')+
+  theme(
+    axis.title = element_text(face = 'bold', size = '17'),
+    axis.text = element_text(size = '10', family = 'arial'),
+    legend.text = element_text(size = '15'),
+    legend.title = element_text(face = 'bold', size = '14'),
+    
+    panel.background = element_rect(fill = 'white', color = NA ),
+    
+    axis.line.y = element_line(color = 'black'),
+    axis.line.x = element_line(color = 'black'),
+    
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(color = 'black'),
+    panel.grid.minor.y = element_line(color = 'black')
+    
+    
+  ) 
+
+scale_color_manual(values = c("blue", "red", "green"))
+print(p)
