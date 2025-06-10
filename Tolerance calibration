@@ -1,0 +1,404 @@
+library(ggplot2)
+# parameters
+start_time = proc.time()
+populations = list(S = 900, I = 10, R = 0, N = 910)
+
+generation = 100
+
+stoch_param = list(B = 0.4, g = 0.08)
+
+# SIR model 
+Stochastic_sir_model = function(times, state, param) {
+  S = state$S
+  I = state$I
+  R = state$R
+  N = state$N
+  
+  B = param$B
+  g = param$g
+  
+  #data frames
+  data = data.frame(
+    Day = 1:generation,
+    Suseptable = numeric(generation),
+    Infected = numeric(generation),
+    Recovered = numeric(generation)
+  )
+  
+  param_data = data.frame(
+    day = 1:generation,
+    Sup_change = numeric(generation),
+    Inf_change = numeric(generation),
+    Recov_change = numeric(generation)
+  )
+  
+  #For loop
+  for(i in 1:generation){
+    
+    #stochastic parameters (environmental variation)
+    F = 0.3
+    E = rnorm(n = 1, mean = 0, sd = 1)
+    Be = B * (1 + F * E)
+    
+    
+    dS = - Be * S * I / N
+    dI = Be * S * I / N - g * I
+    dR = g * I
+    
+    S = max(S + dS, 0)
+    I = max(I + dI, 0)
+    R = max(R + dR, 0) 
+    
+    data$Suseptable[i] = S
+    data$Infected[i] = I
+    data$Recovered[i] = R
+    
+    
+    param_data$Sup_change[i] = dS
+    param_data$Inf_change[i] = dI
+    param_data$Recov_change[i] = dR
+    
+  }
+  
+  
+  return(data)
+}
+
+
+ABC_model_data = read.csv("C:\\Users\\ollie\\Desktop\\Uni - 3rd year\\Research project\\R\\Project code\\comparison data\\Summery_comparison_observed_data_1")
+
+
+#printing stochastic results 
+#print(recovered_observed)
+#print(result_stoc$parameter_data)
+
+#Summery statistic functions 
+
+#Stepwise comparison of recovered data 
+recovered_comparison_ss = function(comparison, generation){
+  #going through the data frame producing the summery stat (abs() used to return absolute number, no negatives)
+  summery_statistic = 0
+  for (i in generation){
+    #root mean squared error or ellucian distance requires squaring then square rooting
+    prior_ss = sqrt((comparison$simulation[i] - comparison$observed[i])^2)
+    summery_statistic = summery_statistic + prior_ss
+  }
+  #Remove NA's to make data easier to work with
+  summery_statistic[is.na(summery_statistic)] = 0
+  return(summery_statistic)
+}
+
+#Time to infected peak
+time_to_peak = function(comparison){
+  max_observed = comparison$day[which.max(comparison$observed)]
+  max_simulated = comparison$day[which.max(comparison$simulation)]
+  
+  
+  #elucian distance
+  distance = sqrt((max_simulated - max_observed)^2)
+  
+  
+  return(distance)
+}
+
+# joint summery stat
+dual_ss = function(infected_data, recovery_data, generation){
+  #Recovery ss
+  summery_statistic = 0  
+  pre_statistic = 0
+  for (i in generation){
+    #root mean squared error or ellucian distance requires squaring then square rooting
+    prior_sum = (recovery_data$simulation[i] - recovery_data$observed[i])^2
+    pre_statistic = pre_statistic + prior_sum
+  }
+  summery_statistic = sqrt(pre_statistic)
+  #print(paste('revovered', summery_statistic))
+  #infected_ss
+  max_observed = infected_data$day[which.max(infected_data$observed)]
+  #print(paste('observed', max_observed))
+  max_simulated = infected_data$day[which.max(infected_data$simulation)]
+  #print(paste('simulated', max_simulated))
+  
+  #elucian distance
+  distance = sqrt((max_simulated - max_observed)^2)
+  #print(distance)
+  
+  
+  #joint distance
+  final_distance = sqrt(distance + summery_statistic)
+  #print(final_distance)
+ 
+  
+  return(final_distance)
+}
+
+
+#range of betas (could be issues with these nto being intergers,
+# 1 try as each simulation the number will be updated )
+potential_beta = list(trys = 1, min = 0.01, max = 0.6)
+
+#tolerance
+tolerance = 10
+
+#simulations
+simulations = 1:1000
+
+#ABC algorithm
+
+ABC = function(simulations, beta_range, observed_all_data, tolerance){ 
+  answer = list()
+  prior_beta = list()
+  for (i in simulations){
+    #function to produce a new beta each run from values outside the function - may need to put an if function to ensure the same beta isnt being used
+    beta = runif(beta_range$trys, min = beta_range$min, max = beta_range$max)
+    p
+    
+    #Adding prior to a vector 
+    stoch_param$B = beta
+    prior_beta = append(prior_beta, beta)
+    
+    #access the recovered population 
+    
+    sim = Stochastic_sir_model(generation, populations, stoch_param)
+    recovered_data = sim$Recovered
+    infected_data = sim$Infected
+    
+    
+    #Data frames to compare observed and recovered
+    comparison_data_infected = data.frame(
+      day = 1:generation,
+      simulation = numeric(generation),
+      observed = numeric(generation)
+    )
+    comparison_data_infected$simulation = infected_data
+    comparison_data_infected$observed = observed_all_data$Infected
+    
+    comparison_data_recovered = data.frame (
+      day = 1:generation,
+      simulation = numeric(generation),
+      observed = numeric(generation)
+    )
+    comparison_data_recovered$simulation = recovered_data
+    comparison_data_recovered$observed = observed_all_data$Recovered
+    
+
+ 
+    
+    summery_statistic = dual_ss(comparison_data_infected, comparison_data_recovered, generation)
+    
+    
+    #acceptance section
+    pre_answer = 0
+    if (summery_statistic >= 0  && summery_statistic <= tolerance){
+      pre_answer = pre_answer + beta
+    }  
+    answer = append(answer, pre_answer)
+  }
+  #data frame that holds both prior and post data 
+  pp_results = data.frame(
+    prior = unlist(prior_beta),
+    posteria = unlist(answer)
+  )
+  return(pp_results)
+}
+#Trouble shooting
+#Ts = (ABC(simulations, potential_beta, recovered_observed, tolerance))
+#print(Ts$prior)
+# Run ABC model until 100 results produced 
+
+ABC_100 = function(number, v_tolerance){
+  all_post_values = c()
+  all_prior_values = c()
+  tally = 0 
+  runs = 0
+  while(tally < number){
+    final = ABC(simulations, potential_beta, ABC_model_data, v_tolerance) 
+    final_post = final$posteria
+    final_prior = final$prior
+    
+    #Print only values bigger than 0
+    only_values = c()
+    for (i in final_post){
+      if (i > 0){
+        only_values = append(only_values, i)
+      }
+    }
+    #print(paste('final betas are: ', only_values))
+    
+    # Creates a data table showing important information from ABC results 
+    #results_table = data.frame(
+      #Tolerance = tolerance,
+      #Minimum = min(only_values),
+      #Maximum = max(only_values),
+      #Median = median(only_values), 
+      #No_of_results = length(only_values)
+    #) 
+    # adding values from this run to the empty value 
+    all_post_values = append(all_post_values, only_values)
+    all_prior_values = append(all_prior_values, final_prior)
+    #Counts the number of values and adds to tally 
+    no_values = length(only_values)
+    print(paste('Individual ABC', no_values))
+    tally = tally + no_values 
+    
+    #counting the number of runs 
+    runs = runs + 1
+  }
+  
+  #Remove so only 100
+  remove_no = length(all_post_values) - 100
+  all_post = all_post_values[-(1:remove_no)]
+ 
+  
+  all_results = list(
+    all_prior = all_prior_values,
+    all_post = all_post,
+    total_posterior = all_post_values,
+    number_of_runs = runs
+  )
+  return(all_results)
+}
+
+number_of_runs = 100
+#Reducing tolerance function 
+variable_tolerance = function(number_of_runs, tolerance){
+  beta = list()
+  tola = tolerance
+  full_table = list()
+  while(tola > 0.1){
+    model = ABC_100(number_of_runs, tola)
+    model_post = model$all_post
+  
+    #descriptive statistic calculations
+    #RMSE
+    RMSE_calc = function(data_set, true_value){
+      pre_answer = 0
+      for (i in data_set){
+        answer = (i - true_value)^2
+        pre_answer = pre_answer + answer
+      }
+      RMSE = sqrt(pre_answer/100)
+      
+      return(RMSE)
+    }
+    
+    RMSE = RMSE_calc(model_post, stoch_param$B)
+    
+    #MAE
+    MAE_calc = function(data_set, true_value){
+      pre_answer = 0
+      for (i in data_set){
+        answer = abs(i - true_value)
+        pre_answer = pre_answer + answer
+      }
+      MAE = pre_answer/100
+      
+      return(MAE)
+    }
+    
+    MAE = MAE_calc(model_post, stoch_param$B)
+    
+    # Bias
+    bias_calc = function(data_set, true_value){
+      mean = mean(data_set)
+      bias = mean - true_value
+      
+      return(bias)
+    }
+    
+    bias = bias_calc(model_post, stoch_param$B)
+    
+    #coverage post 
+    range_to_sample = quantile(model_post, c(0.025, 0.975))
+    
+    tally_coverage = 0
+    for (i in model_post){
+      if (i > range_to_sample[1] && i < range_to_sample[2]){
+        tally_coverage = tally_coverage + 1
+      }
+    }
+    
+    coverage = tally_coverage/number_of_runs
+    
+    #acceptance rate
+    AR = length(model$total_posterior)/length(model$all_prior)
+    
+    # table of descriptive statistics 
+    hold_table = data.frame(
+      tolerance = tola,
+      credibitlity = quantile(model_post, c(0.025, 0.975)),
+      median = median(model_post),
+      coverage = coverage,
+      Bias = bias,
+      MAE = MAE,
+      RMSE = RMSE,
+      acceptance_rate = AR,
+      number_of_runs = model$number_of_runs
+    )
+    
+    full_table = append(full_table, hold_table)
+    #adding data to a list where it is also labelled 
+    int_list = list()
+    int_list[[as.character(tola)]] = model_post
+    beta = append(beta, int_list)
+    
+    #change tolerance 
+    tola = tola/2
+    print(paste('Tolerance', tola))
+  }
+  print('issue')
+  print(full_table)
+  write.csv(full_table, file = 'R&I_tolerance_', row.names = FALSE)
+  return(beta)
+}
+#running whole function
+v_tol = 0.15625
+beta_data = variable_tolerance(number_of_runs, v_tol)
+
+#Arranging data for plotting (data must be in a data frame to work in ggplot)
+plot_data = data.frame ()
+for (i in names(beta_data)) {
+  hold_data = data.frame(
+    Tolerance = i,
+    beta = beta_data[[i]]
+  )
+  plot_data = rbind(plot_data, hold_data)
+}
+# This converts the tolerance column to a category, then sets the order frot the fgure legend. 
+plot_data$Tolerance = factor(plot_data$Tolerance, levels = unique(plot_data$Tolerance))
+
+write.csv(plot_data, file = 'R&I_tolerance_')
+
+end_time = proc.time()
+
+simulation_time = end_time - start_time
+
+print(simulation_time)
+
+p = ggplot(plot_data, aes(x = beta, color = Tolerance)) +
+  geom_density(alpha = 0.5) +
+  labs(x = 'Beta', y = 'Frequency')+
+  geom_vline(xintercept = stoch_param$B, color = 'red', linetype = 'dashed', linewidth = 1 ) +
+  
+  scale_x_continuous(limits = c(0.01, 0.6), breaks = seq(0,0.6, by = 0.1), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0,30), breaks = seq(0,30, by = 5), expand = c(0,0)) + 
+  
+  theme(
+    axis.title = element_text(face = 'bold', size = '20'),
+    axis.text.y = element_text(size = '13', family = 'arial', color = 'black'),
+    axis.text.x = element_text(size = '12', family = 'arial', color = 'black'),
+    legend.text = element_text(size = '15'),
+    legend.title = element_text(face = 'bold', size = '14'),
+    
+    panel.background = element_rect(fill = 'white', color = NA ),
+    
+    axis.line.y = element_line(color = 'black'),
+    axis.line.x = element_line(color = 'black'),
+    
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(color = 'black'),
+    panel.grid.minor.y = element_line(color = 'black')
+    
+  ) 
+print(p)
